@@ -43,7 +43,8 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let listener = TcpListener::bind(socket::LISTEN_ADDR).await?;
+    let listen_addr = app_status.config.read().await.bot_config.listen_addr.clone();
+    let listener = TcpListener::bind(listen_addr).await?;
     tracing::info!("{}: {:?}", i18n::text("server_started"), listener.local_addr());
 
     loop {

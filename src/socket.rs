@@ -28,7 +28,6 @@ use crate::{
 use tokio::sync::OnceCell;
 
 static GLOBAL_APP_STATUS: OnceCell<AppStatus> = OnceCell::const_new();
-pub const LISTEN_ADDR: &str = "127.0.0.1:3310";
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -167,17 +166,20 @@ pub async fn initialize_app_status() -> AppStatus {
                         .map_err(|e| anyhow::Error::new(e)).expect("Failed to parse config JSON")
                 },
                 _ => {
-                    tracing::error!("{}: Expected JSON data", i18n::text("config_read_error"));
+                    tracing::error!("{}: Expected JSON data", i18n::text("config_read_err"));
+                    tracing::error!("Exiting...");
                     std::process::exit(1);
                 }
             }
         },
         Ok(Err(e)) => {
-            tracing::error!("{}: {}", i18n::text("config_read_error"), e);
+            tracing::error!("{}: {}", i18n::text("config_read_err"), e);
+            tracing::error!("Exiting...");
             std::process::exit(1);
         }
         Err(e) => {
             tracing::error!("{}: {}", i18n::text("config_read_timeout"), e);
+            tracing::error!("Exiting...");
             std::process::exit(1);
         }
     };

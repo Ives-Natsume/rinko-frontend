@@ -2,6 +2,8 @@
   "config_file_empty": "配置文件为空",
   "config_file_parse_error": "配置文件解析失败",
   "config_file_read_error": "配置文件读取失败",
+  "config_read_err": "读取配置文件时发生错误",
+  "config_read_timeout": "读取配置文件超时",
   "config_reload_error": "配置文件修改失败",
   "config_reload_success": "配置文件修改成功",
   "config_reload_unexpected_error": "修改配置文件时发生了未知错误",
