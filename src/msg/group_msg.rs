@@ -12,6 +12,10 @@ pub async fn send_group_msg(
     payload: &MessageEvent,
     url: &String,
 ) {
+    if response.message == Some("solar image".to_string()) {
+        send_picture_to_group(response, payload, url).await;
+        return ;
+    }
     let message_text: String = response
         .data
         .map(|data| data.join("\n"))
@@ -103,3 +107,47 @@ pub async fn _send_group_message_to_multiple_groups(
         }
     }
 }
+
+pub async fn send_picture_to_group(
+    response: ApiResponse<Vec<String>>,
+    payload: &MessageEvent,
+    url: &String
+) {
+    let image_path = match response.data {
+        Some(data) if !data.is_empty() => data[0].clone(),
+        _ => {
+            tracing::error!("No image data provided in response");
+            return;
+        }
+    };
+
+    let msg_body = serde_json::json!({
+        "group_id": payload.group_id,
+        "message": "[CQ:image,file={}]".replace("{}", &image_path)
+    });
+
+    let endpoint_url = format!("{}/send_group_msg", url);
+    let client = reqwest::Client::new();
+    let response = client
+        .post(endpoint_url)
+        .json(&msg_body)
+        .send()
+        .await;
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_else(|_| "<Failed to read body>".to_string());
+            if !status.is_success() {
+                tracing::error!("{}: {}", i18n::text("send_group_msg_err"), body);
+            }
+            if body.contains("error") {
+                tracing::error!("{}: {}", i18n::text("send_group_msg_err"), body);
+            }
+        }
+        Err(err) => {
+            tracing::error!("{}: {}", i18n::text("send_group_msg_err"), err);
+        }
+    }
+}
+

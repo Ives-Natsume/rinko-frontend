@@ -43,4 +43,10 @@ impl AppStatus {
         *sender_guard = None;
         tracing::info!("Bot connection cleared from AppStatus");
     }
+
+    pub async fn update_config(&self, config: Config) {
+        let mut config_guard = self.config.write().await;
+        *config_guard = config;
+        tracing::info!("App config updated");
+    }
 }

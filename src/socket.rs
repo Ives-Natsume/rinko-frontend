@@ -114,7 +114,7 @@ pub async fn handle_connection(
                                 tracing::debug!("Received empty response from bot for chat message");
                             } else {
                                 if let Some(app_status) = GLOBAL_APP_STATUS.get() {
-                                    let url = app_status.config.read().await.bot_config.url.clone();
+                                    let url = app_status.config.read().await.bot_config.sse_url.clone();
                                     let bin_payload = content.payload.unwrap();
                                     let payload = BinMessageEvent::from_bin_message_event(bin_payload);
                                     group_msg::send_group_msg(response, &payload, &url).await;

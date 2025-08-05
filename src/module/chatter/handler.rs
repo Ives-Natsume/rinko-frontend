@@ -2,13 +2,12 @@ use crate::msg::prelude::*;
 use crate::{app_status::AppStatus, msg::group_msg};
 use crate::module::chatter::commands;
 use crate::response::ApiResponse;
-use std::sync::Arc;
 use regex;
 
 /// Pre-process incoming messages from the LLOneBot server
 pub async fn message_handler(
     data: String,
-    app_status: &Arc<AppStatus>,
+    app_status: &AppStatus,
 ) {
     let config = app_status.config.read().await;
     if let Ok(payload) = parse_message_event(&data) {
@@ -32,7 +31,7 @@ pub async fn message_handler(
 /// Route text messages to appropriate handlers
 async fn text_router(
     payload: &MessageEvent,
-    app_status: &Arc<AppStatus>,
+    app_status: &AppStatus,
 ) {
     let mut message_text: String = String::new();
     for elem in &payload.message {
@@ -61,7 +60,7 @@ async fn command_handler(
     command: &str,
     args: &str,
     payload: &MessageEvent,
-    app_status: &Arc<AppStatus>
+    app_status: &AppStatus
 ) {
     // remove all punctuation
     let command = command.trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase();
@@ -71,12 +70,12 @@ async fn command_handler(
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!("Command processing error: {:?}", e);
-            ApiResponse::error(format!("Rinko发生了内部异常喵>_\n{:#?}", e))
+            ApiResponse::error(format!("Rinko发生了内部异常喵>_\n\n{:#?}", e))
         }
     };
 
     if response != ApiResponse::empty(){
-        let url = app_status.config.read().await.bot_config.url.clone();
+        let url = app_status.config.read().await.bot_config.sse_url.clone();
         group_msg::send_group_msg(response, payload, &url).await;
     }
 }
@@ -84,7 +83,7 @@ async fn command_handler(
 async fn text_handler(
     text: &Vec<String>,
     payload: &MessageEvent,
-    app_status: &Arc<AppStatus>,
+    app_status: &AppStatus,
 ) {
     let response = match commands::process_text(text.clone(), app_status).await {
         Ok(resp) => resp,
@@ -94,7 +93,7 @@ async fn text_handler(
         }
     };
     if response != ApiResponse::empty(){
-        let url = app_status.config.read().await.bot_config.url.clone();
+        let url = app_status.config.read().await.bot_config.sse_url.clone();
         group_msg::send_group_msg(response, payload, &url).await;
     }
 }

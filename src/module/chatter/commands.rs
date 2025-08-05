@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
 use crate::fs::handler::{FileRequest, FileFormat, FileData};
 use crate::module::executer::cmd;
 use crate::msg::prelude::{IntoBinMessageEvent, MessageEvent};
@@ -32,7 +31,7 @@ pub struct KeywordList {
 pub async fn process_command(
     command: &str,
     args: &str,
-    app_status: &Arc<AppStatus>,
+    app_status: &AppStatus,
     payload: &MessageEvent
 ) -> anyhow::Result<ApiResponse<Vec<String>>> {
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -80,13 +79,17 @@ pub async fn process_command(
         data: None,
     };
 
+    let query_id = payload.user_id.clone();
+    let config = app_status.config.read().await.bot_config.clone();
+    let is_admin = config.admin_id.contains(&query_id);
+
     if let Some(cmd) = command_list.commands.get(command) {
         if cmd.local {
             if let Some(value) = &cmd.value {
                 response.success = true;
                 response.data = Some(vec![value.clone()]);
             } else {
-                response = local_cmd_router(command, args).await;
+                response = local_cmd_router(command, args, app_status, is_admin).await;
             }
         } else {
             let msg_content = MsgContent {
@@ -115,7 +118,7 @@ pub async fn process_command(
 
 pub async fn process_text(
     text_list: Vec<String>,
-    app_status: &Arc<AppStatus>,
+    app_status: &AppStatus,
 ) -> anyhow::Result<ApiResponse<Vec<String>>> {
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
     let keyword_read_request = FileRequest::Read {
@@ -175,6 +178,8 @@ pub async fn process_text(
 async fn local_cmd_router(
     command: &str,
     args: &str,
+    app_status: &AppStatus,
+    is_admin: bool
 ) -> ApiResponse<Vec<String>> {
     let mut response: ApiResponse<Vec<String>> = ApiResponse {
         success: false,
@@ -184,7 +189,11 @@ async fn local_cmd_router(
 
     match command {
         "exe" => {
-            response = cmd::execute_command(command, args).await;
+            if !is_admin {
+                response.message = Some("你没有权限执行此命令喵>_".to_string());
+                return response;
+            }
+            response = cmd::execute_command(command, args, app_status).await;
         }
         _ => {}
     }

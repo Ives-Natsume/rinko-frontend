@@ -10,7 +10,7 @@ mod socket;
 mod fs;
 mod module;
 use tokio::net::TcpListener;
-
+use std::sync::Arc;
 pub const CONFIG_FILE_PATH: &str = "config.json";
 pub const DOC_FILE_PATH: &str = "locales/doc.json";
 pub const COMMAND_TOML_PATH: &str = "commands.toml";
@@ -36,14 +36,18 @@ async fn main() -> anyhow::Result<()> {
     // );
 
     let app_status = socket::initialize_app_status().await;
-    let sse_app_status = app_status.clone();
+    let listen_addr = {
+        let config = app_status.config.read().await;
+        config.bot_config.listen_addr.parse::<std::net::SocketAddr>()?
+    };
+
+    let shared_app_status = Arc::new(app_status);
     tokio::spawn(async move {
-        if let Err(e) = web::sse::run_sse_loop(sse_app_status.into()).await {
+        if let Err(e) = web::sse::run_sse_loop(shared_app_status).await {
             tracing::error!("{}: {}", i18n::text("sse_loop_err"), e);
         }
     });
 
-    let listen_addr = app_status.config.read().await.bot_config.listen_addr.clone();
     let listener = TcpListener::bind(listen_addr).await?;
     tracing::info!("{}: {:?}", i18n::text("server_started"), listener.local_addr());
 

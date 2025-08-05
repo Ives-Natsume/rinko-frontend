@@ -1,6 +1,6 @@
 use tokio::{
     sync::{
-        Semaphore,
+        Semaphore
     },
     time::{
         timeout,
@@ -19,11 +19,9 @@ use futures::TryStreamExt;
 /// Runs the SSE connection to receive message from LLOneBot
 pub async fn run_sse_loop(
     app_status: Arc<AppStatus>,
-) -> anyhow::Result<()> {
-    let url = {
-        let config_guard = app_status.config.read().await;
-        format!("{}/_events", config_guard.bot_config.url)
-    };
+    ) -> anyhow::Result<()> {
+    let shared_config = app_status.config.read().await;
+    let url = shared_config.bot_config.sse_url.clone();
 
     #[allow(unused_mut)]
     let mut client = eventsource_client::ClientBuilder::for_url(&url)?
@@ -32,11 +30,9 @@ pub async fn run_sse_loop(
 
     tracing::info!("{}: {}", i18n::text("sse_connecting"), url);
     let mut stream = client.stream();
-    let shared_config = app_status.config.clone();
 
     let semaphore = {
-        let config_guard = shared_config.read().await;
-        Arc::new(Semaphore::new(config_guard.backend_config.concurrent_limit as usize))
+        Arc::new(Semaphore::new(shared_config.backend_config.concurrent_limit as usize))
     };
 
     if let Err(e) = app_status.send_bot_message(socket::BotMessage::Chat {
@@ -58,17 +54,16 @@ pub async fn run_sse_loop(
             eventsource_client::SSE::Event(evt) => {
                 if evt.event_type == "message" {
                     let data = evt.data.clone();
-                    let app_status_clone = app_status.clone();
+                    let app_status_clone: Arc<AppStatus> = app_status.clone();
                     let semaphore: Arc<Semaphore> = semaphore.clone();
-
                     if let Ok(permit) = semaphore.try_acquire_owned() {
                         tokio::spawn(async move {
-                            let app_status = app_status_clone.clone();
-                            let config = app_status.config.read().await;
+                            let config = app_status_clone.config.read().await;
                             let _permit = permit;
 
                             let timeout_duration = Duration::from_secs(config.backend_config.timeout);
-                            if let Err(e) = timeout(timeout_duration, chatter::handler::message_handler(data, &app_status)).await {
+                            drop(config);
+                            if let Err(e) = timeout(timeout_duration, chatter::handler::message_handler(data, &app_status_clone)).await {
                                 tracing::error!("Timeout or error processing message: {}", e);
                             }
                         });
