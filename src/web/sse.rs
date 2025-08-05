@@ -21,7 +21,7 @@ pub async fn run_sse_loop(
     app_status: Arc<AppStatus>,
     ) -> anyhow::Result<()> {
     let shared_config = app_status.config.read().await;
-    let url = shared_config.bot_config.sse_url.clone();
+    let url = format!("{}/_events", shared_config.bot_config.sse_url.clone());
 
     #[allow(unused_mut)]
     let mut client = eventsource_client::ClientBuilder::for_url(&url)?
@@ -62,7 +62,7 @@ pub async fn run_sse_loop(
                             let _permit = permit;
 
                             let timeout_duration = Duration::from_secs(config.backend_config.timeout);
-                            drop(config);
+                            //drop(config);
                             if let Err(e) = timeout(timeout_duration, chatter::handler::message_handler(data, &app_status_clone)).await {
                                 tracing::error!("Timeout or error processing message: {}", e);
                             }
@@ -72,9 +72,7 @@ pub async fn run_sse_loop(
                     }
                 }
             }
-            eventsource_client::SSE::Comment(_) => {
-
-            }
+            eventsource_client::SSE::Comment(_) => {}
             eventsource_client::SSE::Connected(_) => {
                 tracing::info!("{}: {}", i18n::text("sse_connect_success"), url);
             }
