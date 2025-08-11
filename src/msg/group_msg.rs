@@ -12,7 +12,7 @@ pub async fn send_group_msg(
     payload: &MessageEvent,
     url: &String,
 ) {
-    if response.message == Some("solar image".to_string()) {
+    if response.message == Some("solar image".to_string()) || response.message == Some("image".to_string()) {
         send_picture_to_group(response, payload, url).await;
         return ;
     }
@@ -150,4 +150,3 @@ pub async fn send_picture_to_group(
         }
     }
 }
-

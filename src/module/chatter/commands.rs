@@ -21,6 +21,12 @@ pub struct CommandDef {
 
     #[serde(default)]
     pub value: Option<String>,
+
+    #[serde(default)]
+    pub pic: Option<String>,
+
+    #[serde(default)]
+    pub help: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,13 +85,29 @@ pub async fn process_command(
         data: None,
     };
 
+    let is_help_request = args.trim() == "h" || args.trim() == "help";
+
     let query_id = payload.user_id.clone();
     let config = app_status.config.read().await.bot_config.clone();
     let is_admin = config.admin_id.contains(&query_id);
 
     if let Some(cmd) = command_list.commands.get(command) {
+        if is_help_request {
+            if let Some(help_text) = &cmd.help {
+                response.success = true;
+                response.data = Some(vec![help_text.clone()]);
+            } else {
+                response.message = Some("fna没写捏^ ^)/".to_string());
+            }
+            return Ok(response);
+        }
+
         if cmd.local {
-            if let Some(value) = &cmd.value {
+            if let Some(pic) = &cmd.pic {
+                response.success = true;
+                response.data = Some(vec![pic.clone()]);
+                response.message = Some("image".to_string());
+            } else if let Some(value) = &cmd.value {
                 response.success = true;
                 response.data = Some(vec![value.clone()]);
             } else {
