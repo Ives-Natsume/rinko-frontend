@@ -105,7 +105,7 @@ pub async fn process_command(
         if cmd.local {
             if let Some(pic) = &cmd.pic {
                 response.success = true;
-                response.data = Some(vec![pic.clone()]);
+                response.data = Some(vec![pic.clone(), cmd.value.clone().unwrap_or_default()]);
                 response.message = Some("image".to_string());
             } else if let Some(value) = &cmd.value {
                 response.success = true;

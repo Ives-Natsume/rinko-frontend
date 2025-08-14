@@ -114,7 +114,17 @@ pub async fn send_picture_to_group(
     url: &String
 ) {
     let image_path = match response.data {
-        Some(data) if !data.is_empty() => data[0].clone(),
+        Some(data) => {
+            if data.is_empty() {
+                tracing::error!("No image data provided in response");
+                return;
+            } else if data.len() > 1 && !data[1].is_empty() {
+                send_group_msg_with_pic_and_text(payload, data[0].clone(), data[1].clone(), url).await;
+                return;
+            } else {
+                data[0].clone()
+            }
+        },
         _ => {
             tracing::error!("No image data provided in response");
             return;
@@ -124,6 +134,55 @@ pub async fn send_picture_to_group(
     let msg_body = serde_json::json!({
         "group_id": payload.group_id,
         "message": "[CQ:image,file={}]".replace("{}", &image_path)
+    });
+
+    let endpoint_url = format!("{}/send_group_msg", url);
+    let client = reqwest::Client::new();
+    let response = client
+        .post(endpoint_url)
+        .json(&msg_body)
+        .send()
+        .await;
+
+    match response {
+        Ok(res) => {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_else(|_| "<Failed to read body>".to_string());
+            if !status.is_success() {
+                tracing::error!("{}: {}", i18n::text("send_group_msg_err"), body);
+            }
+            if body.contains("error") {
+                tracing::error!("{}: {}", i18n::text("send_group_msg_err"), body);
+            }
+        }
+        Err(err) => {
+            tracing::error!("{}: {}", i18n::text("send_group_msg_err"), err);
+        }
+    }
+}
+
+pub async fn send_group_msg_with_pic_and_text(
+    payload: &MessageEvent,
+    image_path: String,
+    text: String,
+    url: &String
+) {
+    let msg_body = serde_json::json!({
+        "group_id": payload.group_id,
+        "message": [
+            {
+                "type": "text",
+                "data": {
+                    "text": text
+                }
+            },
+            {
+                "type": "image",
+                "data": {
+                    "file": image_path
+                }
+            }
+        ]
     });
 
     let endpoint_url = format!("{}/send_group_msg", url);
