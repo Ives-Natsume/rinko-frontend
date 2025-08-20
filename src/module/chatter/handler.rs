@@ -85,6 +85,10 @@ async fn text_handler(
     payload: &MessageEvent,
     app_status: &AppStatus,
 ) {
+    let group_id = payload.group_id.clone();
+    if group_id == 95339567 {
+        return ;
+    }
     let response = match commands::process_text(text.clone(), app_status).await {
         Ok(resp) => resp,
         Err(e) => {

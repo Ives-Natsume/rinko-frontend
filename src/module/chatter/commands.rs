@@ -27,6 +27,9 @@ pub struct CommandDef {
 
     #[serde(default)]
     pub help: Option<String>,
+
+    #[serde(default)]
+    pub entertain: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +91,7 @@ pub async fn process_command(
     let is_help_request = args.trim() == "h" || args.trim() == "help";
 
     let query_id = payload.user_id.clone();
+    let group_id = payload.group_id.clone();
     let config = app_status.config.read().await.bot_config.clone();
     let is_admin = config.admin_id.contains(&query_id);
 
@@ -103,6 +107,12 @@ pub async fn process_command(
         }
 
         if cmd.local {
+            if let Some(entertain) = cmd.entertain {
+                if entertain && group_id == 95339567 {
+                    response = ApiResponse::empty();
+                    return Ok(response);
+                }
+            }
             if let Some(pic) = &cmd.pic {
                 response.success = true;
                 response.data = Some(vec![pic.clone(), cmd.value.clone().unwrap_or_default()]);
