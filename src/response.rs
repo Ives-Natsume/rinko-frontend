@@ -1,20 +1,32 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum DataType {
+    Img,
+    Text,
+    Json,
+    File,
+    Other,
+    Null,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ApiResponse<T> {
     pub success: bool,
     /// Carries the data if the operation was successful, could be a response message
     pub data: Option<T>,
     /// Carries an error message if the operation failed
     pub message: Option<String>,
+    pub data_type: DataType,
 }
 
 impl<T> ApiResponse<T> {
-    pub fn ok(data: T) -> Self {
+    pub fn ok(data: T, data_type: DataType) -> Self {
         Self {
             success: true,
             data: Some(data),
             message: None,
+            data_type,
         }
     }
 
@@ -23,6 +35,7 @@ impl<T> ApiResponse<T> {
             success: false,
             data: None,
             message: Some(msg.into()),
+            data_type: DataType::Null,
         }
     }
 
@@ -32,6 +45,7 @@ impl<T> ApiResponse<T> {
             success,
             data: Some(data),
             message: Some(message.into()),
+            data_type: DataType::Null,
         }
     }
 
@@ -40,6 +54,7 @@ impl<T> ApiResponse<T> {
             success: false,
             data: None,
             message: None,
+            data_type: DataType::Null,
         }
     }
 }
@@ -54,5 +69,6 @@ pub fn json_response<T: Serialize>(
         success,
         message: message.into(),
         data,
+        data_type: DataType::Json,
     })
 }

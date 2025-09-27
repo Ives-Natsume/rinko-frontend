@@ -7,6 +7,15 @@ use crate::{
 };
 use crate::msg::prelude::*;
 
+pub async fn group_msg_router(
+    payload: &MessageEvent,
+    config: &config::Config,
+    url: &String,
+    handler: fn(&MessageEvent, &config::Config) -> ApiResponse<Vec<String>>,
+) {
+    let _response = handler(&payload, config);
+}
+
 pub async fn send_group_msg(
     response: ApiResponse<Vec<String>>,
     payload: &MessageEvent,

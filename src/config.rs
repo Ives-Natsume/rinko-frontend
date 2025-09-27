@@ -4,7 +4,7 @@ use std::sync::{
     Arc
 };
 use crate::i18n;
-use crate::response::ApiResponse;
+use crate::response::{ApiResponse, DataType};
 
 pub const CONFIG_PATH: &str = "config.json";
 
@@ -73,7 +73,7 @@ impl FileConfigProvider {
         }
 
         match serde_json::from_str(&config_str) {
-            Ok(config) => ApiResponse::ok(config),
+            Ok(config) => ApiResponse::ok(config, DataType::Json),
             Err(e) => {
                 let error_msg = format!("{}: {}", i18n::text("config_file_parse_error"), e);
                 tracing::error!("{}", error_msg);
