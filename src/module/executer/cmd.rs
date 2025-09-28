@@ -2,8 +2,8 @@ use std::process::Command;
 use crate::{
     app_status::AppStatus,
     fs::handler::{FileRequest, FileFormat, FileData},
-    response::ApiResponse,
-    config::Config,
+    response::{ApiResponse, DataType},
+    app_config::Config,
     CONFIG_FILE_PATH
 };
 
@@ -12,6 +12,7 @@ pub async fn execute_command(command: &str, args: &str, app_status: &AppStatus) 
         success: false,
         message: None,
         data: None,
+        data_type: DataType::Text,
     };
 
     // possible commands:

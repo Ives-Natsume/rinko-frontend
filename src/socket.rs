@@ -16,7 +16,7 @@ use std::{
 };
 use crate::{
     app_status::AppStatus,
-    config::Config,
+    app_config::Config,
     fs,
     i18n,
     msg::{

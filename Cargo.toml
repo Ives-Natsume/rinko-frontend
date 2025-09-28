@@ -8,6 +8,7 @@ anyhow = "1.0.98"
 axum = "0.8.4"
 axum-server = "0.7.2"
 channels = { version = "0.13.0", features = ["full"] }
+config = "0.15.17"
 eventsource-client = "0.15.0"
 futures = "0.3.31"
 indexmap = "2.10.0"

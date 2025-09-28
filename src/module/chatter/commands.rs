@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::fs::handler::{FileRequest, FileFormat, FileData};
 use crate::module::executer::cmd;
 use crate::msg::prelude::{IntoBinMessageEvent, MessageEvent};
-use crate::response::ApiResponse;
+use crate::response::{ApiResponse, DataType};
 use crate::socket::{BotMessage, MsgContent};
 use crate::app_status::AppStatus;
 use crate::COMMAND_TOML_PATH;
@@ -53,7 +53,7 @@ pub async fn process_command(
     if let Err(e) = app_status.file_tx.send(command_read_request).await {
         let err_msg = format!("请求读取命令列表失败，请联系管理员:\n{:#?}", e);
         tracing::error!("{}", err_msg);
-        return Ok(ApiResponse { success: false, message: Some(err_msg), data: None });
+        return Ok(ApiResponse { success: false, message: Some(err_msg), data: None , data_type: DataType::Text });
     }
 
     let file_result = match resp_rx.await {
@@ -61,7 +61,7 @@ pub async fn process_command(
         Err(recv_error) => {
             let err_msg = format!("接收命令列表数据失败，请联系管理员:\n{:#?}", recv_error);
             tracing::error!("{}", err_msg);
-            return Ok(ApiResponse { success: false, message: Some(err_msg), data: None });
+            return Ok(ApiResponse { success: false, message: Some(err_msg), data: None , data_type: DataType::Text });
         }
     };
 
@@ -73,12 +73,12 @@ pub async fn process_command(
         Ok(_) => {
             let err_msg = "Rinko收到非期望的文件格式，请联系管理员".to_string();
             tracing::error!("{}", err_msg);
-            return Ok(ApiResponse { success: false, message: Some(err_msg), data: None });
+            return Ok(ApiResponse { success: false, message: Some(err_msg), data: None , data_type: DataType::Text });
         },
         Err(file_error) => {
             let err_msg = format!("文件操作失败，请联系管理员\n{:#?}", file_error);
             tracing::error!("{}", err_msg);
-            return Ok(ApiResponse { success: false, message: Some(err_msg), data: None });
+            return Ok(ApiResponse { success: false, message: Some(err_msg), data: None , data_type: DataType::Text });
         },
     };
 
@@ -86,6 +86,7 @@ pub async fn process_command(
         success: false,
         message: None,
         data: None,
+        data_type: DataType::Text,
     };
 
     let is_help_request = args.trim() == "h" || args.trim() == "help";
@@ -217,6 +218,7 @@ async fn local_cmd_router(
         success: false,
         message: None,
         data: None,
+        data_type: DataType::Text,
     };
 
     match command {

@@ -5,7 +5,7 @@ use axum::{
 use tokio::sync::oneshot;
 use crate::{
     app_status::AppStatus,
-    config,
+    app_config,
     fs::handler::{FileData, FileFormat, FileRequest},
     i18n,
     response::json_response,
@@ -45,7 +45,7 @@ pub async fn _reload_config_handler(
 
     let new_config_result = match file_result {
         Ok(FileData::Json(data)) => {
-            serde_json::from_value::<config::Config>(data)
+            serde_json::from_value::<app_config::Config>(data)
                 .map_err(|e| format!("{}: Failed to parse config JSON: {}", i18n::text("config_reload_error"), e))
         },
         Ok(_) => Err(format!("{}: Unexpected file format received", i18n::text("config_reload_error"))),

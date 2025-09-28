@@ -1,6 +1,6 @@
 use reqwest;
 use serde_json;
-use crate::config;
+use crate::app_config;
 use crate::{
     response::ApiResponse,
     i18n,
@@ -9,11 +9,11 @@ use crate::msg::prelude::*;
 
 pub async fn group_msg_router(
     payload: &MessageEvent,
-    config: &config::Config,
+    config: &app_config::Config,
     url: &String,
-    handler: fn(&MessageEvent, &config::Config) -> ApiResponse<Vec<String>>,
+    handler: fn(&MessageEvent, &app_config::Config) -> ApiResponse<Vec<String>>,
 ) {
-    let _response = handler(&payload, config);
+    let response = handler(&payload, config);
 }
 
 pub async fn send_group_msg(
@@ -70,7 +70,7 @@ pub async fn send_group_msg(
 
 pub async fn _send_group_message_to_multiple_groups(
     response: ApiResponse<Vec<String>>,
-    config: &config::Config,
+    config: &app_config::Config,
     url: &String,
 ) {
     let groups = &config.bot_config.group_id;

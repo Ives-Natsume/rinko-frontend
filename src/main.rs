@@ -1,7 +1,7 @@
 extern crate lazy_static;
 mod app_status;
 mod i18n;
-mod config;
+mod app_config;
 mod logger;
 mod response;
 mod web;
@@ -9,6 +9,7 @@ mod msg;
 mod socket;
 mod fs;
 mod module;
+use config::{Config, File, Environment};
 use tokio::net::TcpListener;
 use std::sync::Arc;
 pub const CONFIG_FILE_PATH: &str = "config.json";
@@ -23,48 +24,62 @@ async fn main() -> anyhow::Result<()> {
     let _logger = logger::init_logging("logs", "rinko_bot_core");
     tracing::info!("{}", i18n::text("log_initialized"));
 
-    // tokio::spawn(async move {
-    //     let app = Router::new()
-    //         .route("/reload-config", post(web::http_cmd::reload_config_handler))
-    //         .with_state(app_status);
-
-    //         axum_server::Server::bind("0.0.0.0:8080".parse().unwrap())
-    //             .serve(app.into_make_service())
-    //             .await
-    //             .unwrap();
-    //     }
-    // );
-
-    let app_status = socket::initialize_app_status().await;
-    let listen_addr = {
-        let config = app_status.config.read().await;
-        config.bot_config.listen_addr.parse::<std::net::SocketAddr>()?
+    let config_ = app_config::load_config();
+    let config = match config_ {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!("{}: {:#?}", i18n::text("config_load_error"), e);
+            return Err(anyhow::anyhow!("{}: {:#?}", i18n::text("config_load_error"), e));
+        }
     };
 
-    let shared_app_status = Arc::new(app_status);
+    let initial_config = Arc::new(config);
+    tracing::info!("{}", i18n::text("config_loaded"));
+
+    let (config_tx, config_rx) = tokio::sync::watch::channel(initial_config.clone());
+
+    // start a background task to listen for keyboard input
     tokio::spawn(async move {
-        if let Err(e) = web::sse::run_sse_loop(shared_app_status).await {
-            tracing::error!("{}: {}", i18n::text("sse_loop_err"), e);
+        // reload config when "reload" is typed in the console
+        use tokio::io::{self, AsyncBufReadExt};
+        let stdin = io::stdin();
+        let mut reader = io::BufReader::new(stdin).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if line.trim() == "reload" {
+                match app_config::load_config() {
+                    Ok(new_config) => {
+                        let new_config = Arc::new(new_config);
+                        if config_tx.send(new_config).is_ok() {
+                            tracing::info!("{}", i18n::text("config_reloaded"));
+                        } else {
+                            tracing::error!("{}", i18n::text("config_reload_failed"));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("{}: {:#?}", i18n::text("config_load_error"), e);
+                    }
+                }
+            }
         }
     });
 
-    let listener = TcpListener::bind(listen_addr).await?;
-    tracing::info!("{}: {:?}", i18n::text("server_started"), listener.local_addr());
-
-    loop {
-        match listener.accept().await {
-            Ok((stream, addr)) => {
-                tokio::spawn(async move {
-                    if let Err(e) = socket::handle_connection(stream, addr).await {
-                        tracing::error!("Connection error with {}: {}", addr, e);
-                    }
-                    tracing::info!("Connection {} closed", addr);
-                });
+    // test: start multiple tasks to read the config
+    for i in 0..3 {
+        let mut rx = config_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                if rx.changed().await.is_ok() {
+                    let cfg = rx.borrow();
+                    tracing::info!("Task {}: New config received: {:?}", i, cfg.bot_config.listen_addr);
+                }
             }
-            Err(e) => {
-                tracing::error!("Failed to accept connection: {}", e);
-                // keep the server alive
-            }
-        }
+        });
     }
+
+    // keep the main task alive
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+    }
+
+    Ok(())
 }
