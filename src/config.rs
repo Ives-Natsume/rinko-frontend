@@ -15,6 +15,8 @@ pub struct QQConfig {
     pub token_expires_in: u64,       // expire time in seconds
     #[serde(skip)]
     pub client: reqwest::Client,
+    #[serde(skip)]
+    pub token_fetched_at: Option<tokio::time::Instant>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +49,7 @@ pub fn read_config() -> anyhow::Result<()> {
     let config: BotConfigs = match toml::from_str(&config_str) {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("Failed to parse config file {}: {}", path, e);
+            tracing::error!("Failed to parse config file {}: {}", path, e);
             panic!()
         }
     };
