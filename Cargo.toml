@@ -1,0 +1,21 @@
+[package]
+name = "rinko-frontend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+axum = "0.8.8"
+axum-server = "0.8.0"
+futures = "0.3.31"
+regex = "1.12.2"
+reqwest = { version = "0.13.1", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["full"] }
+toml = "0.9.11"
+tracing = "0.1.44"
+tracing-appender = "0.2.4"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+uuid = { version = "1.20.0", features = ["v7"] }
