@@ -9,7 +9,12 @@ pub struct DiscordConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QQConfig {
-    
+    pub app_id: String,
+    pub client_secret: String,
+    pub access_token: String,
+    pub token_expires_in: u64,       // expire time in seconds
+    #[serde(skip)]
+    pub client: reqwest::Client,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,27 +31,23 @@ pub struct EnterpriseWeChatConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BotInstanceConfig {
-    Discord(DiscordConfig),
-    QQ(QQConfig),
-    Telegram(TelegramConfig),
-    EnterpriseWeChat(EnterpriseWeChatConfig),
+pub struct BotConfigs {
+    pub discord: Option<DiscordConfig>,
+    pub qq: Option<QQConfig>,
+    pub telegram: Option<TelegramConfig>,
+    pub enterprise_wechat: Option<EnterpriseWeChatConfig>,
+    pub log_level: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobalConfig {
-    pub instances: Vec<BotInstanceConfig>,
-}
-
-pub static CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
+pub static CONFIG: OnceLock<BotConfigs> = OnceLock::new();
     
 pub fn read_config() -> anyhow::Result<()> {
     let path = "config.toml";
     let config_str = std::fs::read_to_string(path)?;
-    let config: GlobalConfig = match toml::from_str(&config_str) {
+    let config: BotConfigs = match toml::from_str(&config_str) {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::error!("Failed to parse config file {}: {}", path, e);
+            eprintln!("Failed to parse config file {}: {}", path, e);
             panic!()
         }
     };
@@ -64,7 +65,6 @@ mod tests {
     fn test_read_config() {
         read_config().unwrap();
         let config = CONFIG.get().unwrap();
-        println!("Config: {:?}", config);
-        assert!(matches!(config.lidar.data_source, DataSource::Udp | DataSource::Ros));
+        println!("Loaded config: {:#?}", config);
     }
 }

@@ -11,10 +11,23 @@ use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 #[allow(dead_code)]
 pub struct LoggerGuard(WorkerGuard);
 
-pub fn init_logging(log_dir: impl AsRef<Path>, prefix: &str) -> LoggerGuard {
+pub fn init_logging(log_dir: impl AsRef<Path>, prefix: &str, level: &str) -> LoggerGuard {
     let log_dir = log_dir.as_ref().to_path_buf();
+
+    let level = match level {
+        "trace" => level,
+        "debug" => level,
+        "info" => level,
+        "warn" => level,
+        "error" => level,
+        _ => {
+            tracing::warn!("Invalid log level '{}', defaulting to 'info'", level);
+            "info"
+        },
+    };
+
     let builder = EnvFilter::builder()
-        .with_default_directive("rinko-frontend=info".parse().unwrap());
+        .with_default_directive(level.parse().unwrap());
 
     let console_filter = builder.clone().parse_lossy(&std::env::var("RUST_LOG").unwrap_or_default());
     let file_filter = builder.parse_lossy(&std::env::var("RUST_LOG").unwrap_or_default());

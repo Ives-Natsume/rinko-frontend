@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use uuid::Uuid;
-use crate::config::BotInstanceConfig;
+use crate::config::BotConfigs;
 
 #[derive(Debug, Clone)]
 pub struct UnifiedMessage {
@@ -29,13 +29,23 @@ pub struct BotManager {
 }
 
 impl BotManager {
-    pub fn new(configs: Vec<BotInstanceConfig>) -> Self {
+    #[allow(unused)]
+    pub fn new(configs: BotConfigs) -> Self {
         let mut adapters: Vec<Box<dyn BotAdapter + Send + Sync>> = Vec::new();
-        for config in configs {
-            match config {
-                BotInstanceConfig::QQ(c) => adapters.push(Box::new(c)),
-                _ => {}
-            }
+        if let Some(discord_cfg) = configs.discord {
+            tracing::info!("Discord bot configured, but not yet implemented.");
+            // adapters.push(Box::new(discord_cfg));
+        }
+        if let Some(qq_cfg) = configs.qq {
+            adapters.push(Box::new(qq_cfg));
+        }
+        if let Some(telegram_cfg) = configs.telegram {
+            tracing::info!("Telegram bot configured, but not yet implemented.");
+            // adapters.push(Box::new(telegram_cfg));
+        }
+        if let Some(wechat_cfg) = configs.enterprise_wechat {
+            tracing::info!("Enterprise WeChat bot configured, but not yet implemented.");
+            // adapters.push(Box::new(wechat_cfg));
         }
         Self { adapters }
     }
