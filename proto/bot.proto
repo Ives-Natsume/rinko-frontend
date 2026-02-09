@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package bot;
+
+// Platform enum matching the Rust Platform enum
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  QQ = 1;
+  ENTERPRISE_WECHAT = 2;
+  TELEGRAM = 3;
+  DISCORD = 4;
+}
+
+// Unified message structure for cross-platform communication
+message UnifiedMessage {
+  string event_id = 1; // UUID as string
+  string content = 2;
+  Platform platform = 3;
+  int64 timestamp = 4; // Unix timestamp in seconds
+  map<string, string> metadata = 5; // Additional metadata
+}
+
+// Response for message operations
+message MessageResponse {
+  bool success = 1;
+  string message = 2;
+  string message_id = 3; // Backend-assigned message ID
+}
+
+// Command from backend to frontend
+message BotCommand {
+  string command_id = 1;
+  string command_type = 2; // e.g., "send_message", "get_status", "shutdown"
+  map<string, string> parameters = 3;
+  int64 timestamp = 4;
+}
+
+// Task subscription request
+message SubscribeRequest {
+  string frontend_id = 1; // Unique identifier for this frontend instance
+  repeated Platform platforms = 2; // Platforms this frontend handles
+}
+
+// Heartbeat message
+message HeartbeatRequest {
+  string frontend_id = 1;
+  int64 timestamp = 2;
+  map<string, string> status = 3; // Health status info
+}
+
+message HeartbeatResponse {
+  bool healthy = 1;
+  string message = 2;
+}
+
+// Bot backend service definition
+service BotBackend {
+  // Frontend reports incoming message to backend
+  rpc ReportMessage(UnifiedMessage) returns (MessageResponse);
+  
+  // Backend pushes commands to frontend (Server Streaming)
+  rpc SubscribeCommands(SubscribeRequest) returns (stream BotCommand);
+  
+  // Heartbeat check
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  
+  // Bidirectional chat stream for real-time communication
+  rpc BidirectionalChat(stream UnifiedMessage) returns (stream BotCommand);
+}

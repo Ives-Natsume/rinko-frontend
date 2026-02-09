@@ -1,8 +1,10 @@
 use crate::{config::QQConfig, utils::BotAdapter};
 use crate::utils::*;
+use crate::backend::connection_manager::BackendConnectionManager;
 use uuid::Uuid;
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use serde::{Deserialize, Serialize};
@@ -99,6 +101,7 @@ pub struct SendMessageResponse {
 struct WebhookState {
     client_secret: String,  // used as bot_secret for signature verification
     qq_config: Arc<RwLock<QQConfig>>,
+    backend_manager: Option<Arc<BackendConnectionManager>>,
 }
 
 /// Webhook handler for QQ bot events
@@ -156,7 +159,7 @@ async fn handle_webhook(
             if let Some(event_type) = &payload.t {
                 tracing::info!("Event type: {}", event_type);
                 let event_id = payload.d.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-                handle_event(&state.qq_config, event_type, &payload.d, event_id).await;
+                handle_event(&state.qq_config, &state.backend_manager, event_type, &payload.d, event_id).await;
             }
 
             (StatusCode::NO_CONTENT, "").into_response()
@@ -202,6 +205,7 @@ async fn handle_validation(
 /// Handle event processing
 async fn handle_event(
     qq_config: &Arc<RwLock<QQConfig>>,
+    backend_manager: &Option<Arc<BackendConnectionManager>>,
     event_type: &str,
     data: &serde_json::Value,
     event_id: Option<String>,
@@ -209,7 +213,7 @@ async fn handle_event(
     match event_type {
         "READY" => tracing::info!("Bot is ready"),
         "GROUP_AT_MESSAGE_CREATE" => {
-            handle_group_at_message(qq_config, data, event_id).await;
+            handle_group_at_message(qq_config, backend_manager, data, event_id).await;
         }
         "MESSAGE_CREATE" | "C2C_MESSAGE_CREATE" => {
             tracing::debug!("Message received: {:#?}", data);
@@ -228,6 +232,7 @@ async fn handle_event(
 /// Handle GROUP_AT_MESSAGE_CREATE event
 async fn handle_group_at_message(
     qq_config: &Arc<RwLock<QQConfig>>,
+    backend_manager: &Option<Arc<BackendConnectionManager>>,
     data: &serde_json::Value,
     event_id: Option<String>,
 ) {
@@ -249,50 +254,78 @@ async fn handle_group_at_message(
         msg_event.content
     );
 
-    let config = qq_config.read().await;
     let content_trimmed = msg_event.content.trim();
-
-    // Check if it's an /img command
-    if content_trimmed.starts_with("/img") {
-        tracing::debug!("Image command detected, sending image...");
+    
+    // Parse command from message
+    // let parsed_cmd = ParsedCommand::parse(content_trimmed);
+    
+    // Report message to backend if connected
+    if let Some(manager) = backend_manager {
+        let state = manager.state().await;
         
-        // Send image from local file
-        if let Err(e) = config.send_group_image(
-            &msg_event.group_openid,
-            "runtime_data/example.jpeg",
-            Some(msg_event.id.clone()),
-            event_id.clone(),
-            Some(1),
-        ).await {
-            tracing::error!("Failed to send image: {}", e);
+        if state == crate::backend::connection_manager::ConnectionState::Connected {
+            let unified_msg = UnifiedMessage {
+                event_id: Uuid::now_v7(),
+                content: content_trimmed.to_string(),
+                platform: Platform::QQ,
+            };
             
-            // Send error message as fallback
-            let error_msg = format!("发送图片失败: {}", e);
-            let _ = config.send_group_message(
-                &msg_event.group_openid,
-                &error_msg,
-                Some(msg_event.id),
-                event_id,
-                Some(2),
-            ).await;
+            // Create metadata with command info and message context
+            let mut metadata = HashMap::new();
+            metadata.insert("group_openid".to_string(), msg_event.group_openid.clone());
+            metadata.insert("message_id".to_string(), msg_event.id.clone());
+            if let Some(ref eid) = event_id {
+                metadata.insert("event_id".to_string(), eid.clone());
+            }
+            
+            // Try to report to backend
+            let client_lock = manager.client();
+            if let Some(client) = &mut *client_lock.write().await {
+                match client.report_message(unified_msg, metadata.clone()).await {
+                    Ok(response) => {
+                        tracing::debug!(
+                            "Message reported to backend",
+                        );
+                        
+                        // If backend returns a response message, send it
+                        if !response.message.is_empty() && response.message != "OK" {
+                            let config = qq_config.read().await;
+                            let _ = config.send_group_message(
+                                &msg_event.group_openid,
+                                &response.message,
+                                Some(msg_event.id.clone()),
+                                event_id.clone(),
+                                Some(1),
+                            ).await;
+                        }
+                        
+                        // Backend handled the message, return early
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to report message to backend: {}. Marking as disconnected.", e);
+                        manager.mark_disconnected().await;
+                    }
+                }
+            }
         } else {
-            tracing::info!("Image sent successfully");
+            tracing::debug!("Backend offline, using local processing");
         }
-    } else {
-        // Normal text reply
-        let reply_content = format!("Rinko desu >_<\nMessage received: {}", content_trimmed);
-        
-        if let Err(e) = config.send_group_message(
-            &msg_event.group_openid,
-            &reply_content,
-            Some(msg_event.id),
-            event_id,
-            Some(1),
-        ).await {
-            tracing::error!("Failed to send reply: {}", e);
-        } else {
-            tracing::info!("Reply sent successfully");
-        }
+    }
+    
+    // Local fallback processing if backend is disabled or failed
+    let config = qq_config.read().await;
+
+    let reply_content = format!("\nRinko backend offline >_\nMessage received: {}", content_trimmed);
+    
+    if let Err(e) = config.send_group_message(
+        &msg_event.group_openid,
+        &reply_content,
+        Some(msg_event.id),
+        event_id,
+        Some(1),
+    ).await {
+        tracing::error!("Failed to send reply: {}", e);
     }
 }
 
@@ -368,7 +401,7 @@ impl BotAdapter for QQConfig {
     async fn process_message(&self) -> anyhow::Result<UnifiedMessage> {
         // Implementation for processing a message from QQ
         let message = UnifiedMessage {
-            enevt_id: Uuid::now_v7(),
+            event_id: Uuid::now_v7(),
             content: "Sample QQ message".to_string(),
             platform: Platform::QQ,
         };
@@ -391,6 +424,7 @@ impl QQConfig {
     /// Start webhook server to receive QQ bot events
     pub async fn start_webhook_server(
         qq_config: Arc<RwLock<Self>>,
+        backend_manager: Option<Arc<BackendConnectionManager>>,
         port: u16,
     ) -> anyhow::Result<()> {
         let client_secret = qq_config.read().await.client_secret.clone();
@@ -398,6 +432,7 @@ impl QQConfig {
         let state = Arc::new(WebhookState {
             client_secret,
             qq_config: qq_config.clone(),
+            backend_manager,
         });
 
         let app = Router::new()
@@ -677,30 +712,5 @@ impl QQConfig {
         );
 
         Ok(response)
-    }
-
-    pub async fn test_send_message(&self) -> anyhow::Result<()> {
-        let group_openid = "850923669"; // Replace with actual group_openid
-        
-        match self.send_group_message(
-            group_openid,
-            "Shirokane Rinko desu >_",
-            None,
-            None,
-            None,
-        ).await {
-            Ok(response) => {
-                tracing::info!(
-                    "Test message sent successfully - ID: {}, Timestamp: {}",
-                    response.id,
-                    response.timestamp
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Failed to send test message: {}", e);
-                Err(e)
-            }
-        }
     }
 }

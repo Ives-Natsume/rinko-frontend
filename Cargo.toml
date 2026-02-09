@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+async-stream = "0.3.6"
 async-trait = "0.1.89"
 axum = "0.8.8"
 axum-server = "0.8.0"
@@ -18,7 +19,15 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.11"
+tonic = "0.12.3"
+tower = "0.5.2"
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 uuid = { version = "1.20.0", features = ["v7"] }
+prost = "0.13.3"
+prost-types = "0.13.3"
+tokio-stream = "0.1.18"
+
+[build-dependencies]
+tonic-build = "0.12.3"

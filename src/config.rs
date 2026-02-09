@@ -33,7 +33,16 @@ pub struct EnterpriseWeChatConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendConfig {
+    pub enable: bool,
+    pub url: String,
+    pub frontend_id: String,
+    pub heartbeat_interval: u64,  // in seconds
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotConfigs {
+    pub backend: Option<BackendConfig>,
     pub discord: Option<DiscordConfig>,
     pub qq: Option<QQConfig>,
     pub telegram: Option<TelegramConfig>,

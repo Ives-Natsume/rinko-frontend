@@ -4,7 +4,7 @@ use crate::config::BotConfigs;
 
 #[derive(Debug, Clone)]
 pub struct UnifiedMessage {
-    pub enevt_id: Uuid,
+    pub event_id: Uuid,  // Fixed typo: enevt_id -> event_id
     pub content: String,
     pub platform: Platform,
 }

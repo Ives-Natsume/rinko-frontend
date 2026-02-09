@@ -1,6 +1,8 @@
 use rinko_frontend::logging;
 use rinko_frontend::config;
 use rinko_frontend::config::QQConfig;
+use rinko_frontend::backend::BackendConnectionManager;
+use rinko_frontend::utils::Platform;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -11,8 +13,42 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Rinko Frontend started.");
 
-    // test: init QQ bot
-    if let Some(mut qq_cfg) = rinko_frontend::config::CONFIG.get().unwrap().qq.clone() {
+    let bot_config = config::CONFIG.get().unwrap();
+
+    // Initialize backend connection manager if enabled
+    let backend_manager = if let Some(backend_cfg) = &bot_config.backend {
+        if backend_cfg.enable {
+            tracing::info!("Backend enabled, initializing connection manager...");
+            
+            let manager = Arc::new(BackendConnectionManager::new(backend_cfg.clone()));
+            
+            // Try initial connection (non-blocking)
+            manager.initialize().await;
+            
+            // Start auto-reconnect task
+            manager.clone().start_reconnect_task();
+            tracing::info!("✓ Backend auto-reconnect task started (retry interval: 10s)");
+            
+            // Start heartbeat task
+            manager.clone().start_heartbeat_task();
+            tracing::info!("✓ Backend heartbeat task started (interval: {}s)", backend_cfg.heartbeat_interval);
+            
+            // Start command subscription task
+            manager.clone().start_command_subscription_task(vec![Platform::QQ]);
+            tracing::info!("✓ Backend command subscription task started");
+            
+            Some(manager)
+        } else {
+            tracing::info!("Backend disabled in configuration");
+            None
+        }
+    } else {
+        tracing::info!("No backend configuration found");
+        None
+    };
+
+    // Initialize QQ bot
+    if let Some(mut qq_cfg) = bot_config.qq.clone() {
         if let Err(e) = qq_cfg.init().await {
             tracing::error!("Failed to initialize QQ bot: {}", e);
         } else {
@@ -25,15 +61,19 @@ async fn main() -> anyhow::Result<()> {
 
             // Start webhook server
             let qq_cfg_for_webhook = qq_cfg_shared.clone();
+            let backend_for_webhook = backend_manager.clone();
             tokio::spawn(async move {
-                if let Err(e) = QQConfig::start_webhook_server(qq_cfg_for_webhook, 3110).await {
+                if let Err(e) = QQConfig::start_webhook_server(
+                    qq_cfg_for_webhook,
+                    backend_for_webhook,
+                    3110
+                ).await {
                     tracing::error!("Webhook server error: {}", e);
                 }
             });
             tracing::info!("QQ webhook server starting on port 3110...");
             
-            // Keep the program running to allow the background task to work
-            // In a real application, you'd have your main bot logic here
+            // Keep the program running
             tokio::signal::ctrl_c().await?;
             tracing::info!("Shutdown signal received.");
         }
