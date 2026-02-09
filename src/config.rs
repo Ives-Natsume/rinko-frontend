@@ -10,7 +10,7 @@ pub struct DiscordConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QQConfig {
     pub app_id: String,
-    pub client_secret: String,
+    pub client_secret: String,       // also used as bot_secret for webhook signature verification
     pub access_token: String,
     pub token_expires_in: u64,       // expire time in seconds
     #[serde(skip)]

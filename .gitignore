@@ -1,3 +1,5 @@
 /target
 /logs
+/ref
+/runtime_data
 config.toml

@@ -6,26 +6,34 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use serde::{Deserialize, Serialize};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use axum::{
     extract::State,
     routing::post,
     Json,
     Router,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 
 const QQ_ACCESS_TOKEN_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
 const QQ_AUTHORIZE_URL: &str = "https://api.sgroup.qq.com";
 
 #[derive(Deserialize)]
-struct Payload {
-    data: serde_json::Value,
+#[allow(dead_code)]
+struct WebhookPayload {
+    op: u8,
+    d: serde_json::Value,
+    #[serde(default)]
+    t: Option<String>,
+    #[serde(default)]
+    s: Option<u32>,
 }
 
 #[derive(Deserialize)]
 struct ValidationRequest {
-    event_ts: String,
     plain_token: String,
+    event_ts: String,
 }
 
 #[derive(Serialize)]
@@ -34,43 +42,325 @@ struct ValidationResponse {
     signature: String,
 }
 
-struct AppState {
-    bot_secret: String,
+#[allow(unused)]
+#[derive(Deserialize, Debug)]
+struct GroupMessageEvent {
+    id: String,
+    group_openid: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    timestamp: String,
 }
 
-async fn handle_validation(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<Payload>,
-) -> anyhow::Result<Json<ValidationResponse>> {
-    // 1. Parse the inner "data" field
-    let validation: ValidationRequest = serde_json::from_value(payload.data)
-        .map_err(|e| anyhow::anyhow!("Parse data err: {}", e))?;
+#[derive(Serialize, Debug)]
+struct SendGroupMessageRequest {
+    content: Option<String>,
+    msg_type: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    msg_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    msg_seq: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<MediaInfo>,
+}
 
-    // 2. Derive the seed (32 bytes) from bot_secret
-    let mut seed = state.bot_secret.clone();
-    while seed.len() < 32 {
-        seed.push_str(&state.bot_secret);
+#[derive(Serialize, Debug)]
+struct MediaInfo {
+    file_info: String,
+}
+
+#[derive(Serialize, Debug)]
+struct UploadMediaRequest {
+    file_type: u8,
+    url: String,
+    srv_send_msg: bool,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct UploadMediaResponse {
+    file_uuid: String,
+    file_info: String,
+    ttl: u32,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct SendMessageResponse {
+    pub id: String,
+    pub timestamp: i64,
+}
+
+#[derive(Clone)]
+struct WebhookState {
+    client_secret: String,  // used as bot_secret for signature verification
+    qq_config: Arc<RwLock<QQConfig>>,
+}
+
+/// Webhook handler for QQ bot events
+async fn handle_webhook(
+    State(state): State<Arc<WebhookState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    tracing::debug!("Received webhook request");
+    tracing::debug!("Headers: {:#?}", headers);
+    tracing::debug!("Body: {:#?}", body);
+
+    // Parse payload to check op code
+    let payload: WebhookPayload = match serde_json::from_str(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Failed to parse payload: {}", e);
+            return (StatusCode::BAD_REQUEST, "Invalid JSON").into_response();
+        }
+    };
+
+    // Handle different operation codes
+    match payload.op {
+        13 => {
+            // op=13: Configuration validation (when setting up webhook URL)
+            tracing::info!("Handling webhook configuration validation (op=13)");
+            handle_validation(&state.client_secret, payload.d).await
+        }
+        0 => {
+            // op=0: Runtime event dispatch
+            tracing::debug!("Handling runtime event (op=0)");
+            
+            // Verify signature for runtime events
+            let sig_header = headers.get("X-Signature-Ed25519")
+                .and_then(|v| v.to_str().ok());
+            let timestamp_header = headers.get("X-Signature-Timestamp")
+                .and_then(|v| v.to_str().ok());
+
+            let (sig_hex, timestamp) = match (sig_header, timestamp_header) {
+                (Some(s), Some(t)) => (s, t),
+                _ => {
+                    tracing::warn!("Missing signature headers");
+                    return (StatusCode::UNAUTHORIZED, "Missing signature headers").into_response();
+                }
+            };
+
+            if let Err(e) = verify_runtime_signature(&state.client_secret, sig_hex, timestamp, &body) {
+                tracing::error!("Signature verification failed: {}", e);
+                return (StatusCode::UNAUTHORIZED, "Invalid signature").into_response();
+            }
+
+            tracing::debug!("Signature verified successfully");
+            
+            // Handle the event
+            if let Some(event_type) = &payload.t {
+                tracing::info!("Event type: {}", event_type);
+                let event_id = payload.d.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                handle_event(&state.qq_config, event_type, &payload.d, event_id).await;
+            }
+
+            (StatusCode::NO_CONTENT, "").into_response()
+        }
+        _ => {
+            tracing::warn!("Unknown op code: {}", payload.op);
+            (StatusCode::BAD_REQUEST, "Unknown operation").into_response()
+        }
     }
-    let seed_bytes = &seed.as_bytes()[0..32];
-    
-    // 3. Generate SigningKey
-    let secret_key: [u8; 32] = seed_bytes.try_into()
-        .map_err(|_| anyhow::anyhow!("Failed to convert seed to 32-byte array"))?;
-    let signing_key = SigningKey::from_bytes(&secret_key);
+}
 
-    // 4. Create message: event_ts + plain_token
-    let mut message = Vec::new();
-    message.extend_from_slice(validation.event_ts.as_bytes());
-    message.extend_from_slice(validation.plain_token.as_bytes());
+/// Handle webhook configuration validation (op=13)
+async fn handle_validation(
+    client_secret: &str,
+    data: serde_json::Value,
+) -> Response {
+    let validation: ValidationRequest = match serde_json::from_value(data) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("Failed to parse validation request: {}", e);
+            return (StatusCode::BAD_REQUEST, "Invalid validation data").into_response();
+        }
+    };
 
-    // 5. Sign and hex encode
-    let signature = signing_key.sign(&message);
-    let signature_hex = hex::encode(signature.to_bytes());
+    // Generate signature for validation
+    let signature = match generate_validation_signature(client_secret, &validation.event_ts, &validation.plain_token) {
+        Ok(sig) => sig,
+        Err(e) => {
+            tracing::error!("Failed to generate signature: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to generate signature").into_response();
+        }
+    };
 
-    Ok(Json(ValidationResponse {
+    let response = ValidationResponse {
         plain_token: validation.plain_token,
-        signature: signature_hex,
-    }))
+        signature,
+    };
+
+    tracing::info!("Validation response generated successfully");
+    Json(response).into_response()
+}
+
+/// Handle event processing
+async fn handle_event(
+    qq_config: &Arc<RwLock<QQConfig>>,
+    event_type: &str,
+    data: &serde_json::Value,
+    event_id: Option<String>,
+) {
+    match event_type {
+        "READY" => tracing::info!("Bot is ready"),
+        "GROUP_AT_MESSAGE_CREATE" => {
+            handle_group_at_message(qq_config, data, event_id).await;
+        }
+        "MESSAGE_CREATE" | "C2C_MESSAGE_CREATE" => {
+            tracing::debug!("Message received: {:#?}", data);
+            // TODO: Process other message types
+        }
+        "GUILD_CREATE" => tracing::info!("Joined a guild"),
+        "FRIEND_ADD" => tracing::info!("Friend added"),
+        "GROUP_ADD_ROBOT" => {
+            tracing::info!("Added to group: {:#?}", data);
+            // Could send a welcome message here
+        }
+        _ => tracing::debug!("Unhandled event type: {}", event_type),
+    }
+}
+
+/// Handle GROUP_AT_MESSAGE_CREATE event
+async fn handle_group_at_message(
+    qq_config: &Arc<RwLock<QQConfig>>,
+    data: &serde_json::Value,
+    event_id: Option<String>,
+) {
+    tracing::debug!("Group @ message received: {:#?}", data);
+    
+    // Parse message event
+    let msg_event = match serde_json::from_value::<GroupMessageEvent>(data.clone()) {
+        Ok(event) => event,
+        Err(e) => {
+            tracing::error!("Failed to parse GROUP_AT_MESSAGE_CREATE event: {}", e);
+            return;
+        }
+    };
+
+    tracing::debug!(
+        "Parsed message - ID: {}, Group: {}, Content: '{}'",
+        msg_event.id,
+        msg_event.group_openid,
+        msg_event.content
+    );
+
+    let config = qq_config.read().await;
+    let content_trimmed = msg_event.content.trim();
+
+    // Check if it's an /img command
+    if content_trimmed.starts_with("/img") {
+        tracing::debug!("Image command detected, sending image...");
+        
+        // Send image from local file
+        if let Err(e) = config.send_group_image(
+            &msg_event.group_openid,
+            "runtime_data/example.jpeg",
+            Some(msg_event.id.clone()),
+            event_id.clone(),
+            Some(1),
+        ).await {
+            tracing::error!("Failed to send image: {}", e);
+            
+            // Send error message as fallback
+            let error_msg = format!("发送图片失败: {}", e);
+            let _ = config.send_group_message(
+                &msg_event.group_openid,
+                &error_msg,
+                Some(msg_event.id),
+                event_id,
+                Some(2),
+            ).await;
+        } else {
+            tracing::info!("Image sent successfully");
+        }
+    } else {
+        // Normal text reply
+        let reply_content = format!("Rinko desu >_<\nMessage received: {}", content_trimmed);
+        
+        if let Err(e) = config.send_group_message(
+            &msg_event.group_openid,
+            &reply_content,
+            Some(msg_event.id),
+            event_id,
+            Some(1),
+        ).await {
+            tracing::error!("Failed to send reply: {}", e);
+        } else {
+            tracing::info!("Reply sent successfully");
+        }
+    }
+}
+
+/// Generate signature for configuration validation (op=13)
+fn generate_validation_signature(
+    client_secret: &str,
+    event_ts: &str,
+    plain_token: &str,
+) -> anyhow::Result<String> {
+    // Generate signing key from client_secret
+    let mut seed = client_secret.to_string();
+    while seed.len() < 32 {
+        seed.push_str(client_secret);
+    }
+    let seed_bytes: [u8; 32] = seed.as_bytes()[0..32]
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Failed to create seed"))?;
+
+    let signing_key = SigningKey::from_bytes(&seed_bytes);
+
+    // Construct message: event_ts + plain_token
+    let mut message = Vec::new();
+    message.extend_from_slice(event_ts.as_bytes());
+    message.extend_from_slice(plain_token.as_bytes());
+
+    // Sign and encode as hex
+    let signature = signing_key.sign(&message);
+    Ok(hex::encode(signature.to_bytes()))
+}
+
+/// Verify Ed25519 signature for runtime events (op=0)
+fn verify_runtime_signature(
+    client_secret: &str,  // client_secret is used as bot_secret
+    sig_hex: &str,
+    timestamp: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    // 1. Generate public key from client_secret (used as bot_secret)
+    // According to docs: seed = secret + secret (until >= 32 bytes)
+    let mut seed = client_secret.to_string();
+    while seed.len() < 32 {
+        seed.push_str(client_secret);
+    }
+    let seed_bytes: [u8; 32] = seed.as_bytes()[0..32]
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Failed to create seed"))?;
+
+    // Generate keypair to extract public key
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+    let verifying_key: VerifyingKey = (&signing_key).into();
+
+    // 2. Decode signature from hex
+    let sig_bytes = hex::decode(sig_hex)
+        .map_err(|e| anyhow::anyhow!("Failed to decode signature hex: {}", e))?;
+    let signature = Signature::from_slice(&sig_bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid signature format: {}", e))?;
+
+    // 3. Construct message: timestamp + body
+    let mut message = Vec::new();
+    message.extend_from_slice(timestamp.as_bytes());
+    message.extend_from_slice(body.as_bytes());
+
+    // 4. Verify signature
+    verifying_key
+        .verify(&message, &signature)
+        .map_err(|e| anyhow::anyhow!("Signature verification failed: {}", e))?;
+
+    Ok(())
 }
 
 #[async_trait]
@@ -96,6 +386,31 @@ impl QQConfig {
     pub async fn init(&mut self) -> anyhow::Result<()> {
         self.client = reqwest::Client::new();
         self.get_access_token().await
+    }
+
+    /// Start webhook server to receive QQ bot events
+    pub async fn start_webhook_server(
+        qq_config: Arc<RwLock<Self>>,
+        port: u16,
+    ) -> anyhow::Result<()> {
+        let client_secret = qq_config.read().await.client_secret.clone();
+        
+        let state = Arc::new(WebhookState {
+            client_secret,
+            qq_config: qq_config.clone(),
+        });
+
+        let app = Router::new()
+            .route("/webhook", post(handle_webhook))
+            .with_state(state);
+
+        let addr = format!("127.0.0.1:{}", port);
+        tracing::info!("Starting QQ webhook server on {}", addr);
+
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        axum::serve(listener, app).await?;
+
+        Ok(())
     }
 
     pub async fn get_access_token(&mut self) -> anyhow::Result<()> {
@@ -168,32 +483,223 @@ impl QQConfig {
         });
     }
 
-    pub async fn test_send_message(&self) -> anyhow::Result<()> {
-        let http_url = format!("{}/v2/groups/{}/messages", QQ_AUTHORIZE_URL, "850923669");
-        let json_payload = serde_json::json!({
-            "content": "Shirokane Rinko desu >_",
-            "msg_type": 0,
-        });
-        let resp = self.client
-            .post(&http_url)
-            .header("Authorization", format!("QQBot {}", self.access_token))
-            .bearer_auth(&self.access_token)
-            .json(&json_payload)
-            .send()
-            .await;
-
-        println!("Response: {:#?}", resp);
+    /// Upload media file and get file_info
+    /// 
+    /// # Parameters
+    /// - `group_openid`: The openid of the target group
+    /// - `file_type`: 1=image, 2=video, 3=voice, 4=file
+    /// - `url`: URL of the media resource (must be accessible by QQ servers)
+    /// - `srv_send_msg`: Whether to send message directly (not recommended)
+    async fn upload_group_media(
+        &self,
+        group_openid: &str,
+        file_type: u8,
+        url: &str,
+        srv_send_msg: bool,
+    ) -> anyhow::Result<UploadMediaResponse> {
+        let api_url = format!("{}/v2/groups/{}/files", QQ_AUTHORIZE_URL, group_openid);
         
-        match resp {
+        let payload = UploadMediaRequest {
+            file_type,
+            url: url.to_string(),
+            srv_send_msg,
+        };
+
+        tracing::debug!("Uploading media to group {}: {:?}", group_openid, payload);
+
+        let resp = self.client
+            .post(&api_url)
+            .header("Authorization", format!("QQBot {}", self.access_token))
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let response: UploadMediaResponse = resp.json().await?;
+        tracing::info!(
+            "Media uploaded - UUID: {}, TTL: {}s",
+            response.file_uuid,
+            response.ttl
+        );
+
+        Ok(response)
+    }
+
+    /// Send rich media message to group
+    /// 
+    /// # Parameters
+    /// - `group_openid`: The openid of the target group
+    /// - `file_info`: The file_info obtained from upload_group_media
+    /// - `msg_id`: Optional message ID for passive reply
+    /// - `event_id`: Optional event ID for passive message
+    /// - `msg_seq`: Optional message sequence number
+    async fn send_group_media_message(
+        &self,
+        group_openid: &str,
+        file_info: &str,
+        msg_id: Option<String>,
+        event_id: Option<String>,
+        msg_seq: Option<u32>,
+    ) -> anyhow::Result<SendMessageResponse> {
+        let url = format!("{}/v2/groups/{}/messages", QQ_AUTHORIZE_URL, group_openid);
+        
+        let payload = SendGroupMessageRequest {
+            content: None,
+            msg_type: 7, // 7 = rich media
+            msg_id,
+            event_id,
+            msg_seq,
+            media: Some(MediaInfo {
+                file_info: file_info.to_string(),
+            }),
+        };
+
+        tracing::debug!("Sending media message to group {}: {:?}", group_openid, payload);
+
+        let resp = self.client
+            .post(&url)
+            .header("Authorization", format!("QQBot {}", self.access_token))
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let response: SendMessageResponse = resp.json().await?;
+        tracing::info!(
+            "Media message sent successfully - ID: {}, Timestamp: {}",
+            response.id,
+            response.timestamp
+        );
+
+        Ok(response)
+    }
+
+    /// Send image from local file to group
+    /// This is a high-level function that handles the complete workflow
+    /// 
+    /// # Parameters
+    /// - `group_openid`: The openid of the target group
+    /// - `local_path`: Path to the local image file
+    /// - `msg_id`: Optional message ID for passive reply
+    /// - `event_id`: Optional event ID for passive message
+    /// - `msg_seq`: Optional message sequence number
+    pub async fn send_group_image(
+        &self,
+        group_openid: &str,
+        local_path: &str,
+        msg_id: Option<String>,
+        event_id: Option<String>,
+        msg_seq: Option<u32>,
+    ) -> anyhow::Result<SendMessageResponse> {
+        // For local files, we need to provide a URL accessible by QQ servers
+        // In production, you would upload to a CDN or temporary hosting
+        // For now, we'll use a public URL as a placeholder
+        
+        // TODO: Implement actual file upload or local HTTP server
+        // For testing, you need to replace this with an actual accessible URL
+        let image_url = "https://metasequoiani.com/_astro/image.BnwkcnDf_Z2vIi4L.webp"; // Replace with actual URL
+        
+        tracing::warn!(
+            "Local file path '{}' needs to be accessible via URL. Using placeholder: {}",
+            local_path,
+            image_url
+        );
+        
+        // Step 1: Upload media and get file_info
+        let upload_response = self.upload_group_media(
+            group_openid,
+            1, // 1 = image
+            image_url,
+            false, // Don't send directly, get file_info for flexible usage
+        ).await?;
+
+        // Step 2: Send media message using file_info
+        self.send_group_media_message(
+            group_openid,
+            &upload_response.file_info,
+            msg_id,
+            event_id,
+            msg_seq,
+        ).await
+    }
+
+    /// Send message to a group chat
+    /// 
+    /// # Parameters
+    /// - `group_openid`: The openid of the target group
+    /// - `content`: Message content
+    /// - `msg_id`: Optional message ID for passive reply (within 5 minutes)
+    /// - `event_id`: Optional event ID for passive message
+    /// - `msg_seq`: Optional message sequence number (default: 1)
+    pub async fn send_group_message(
+        &self,
+        group_openid: &str,
+        content: &str,
+        msg_id: Option<String>,
+        event_id: Option<String>,
+        msg_seq: Option<u32>,
+    ) -> anyhow::Result<SendMessageResponse> {
+        let url = format!("{}/v2/groups/{}/messages", QQ_AUTHORIZE_URL, group_openid);
+        
+        let payload = SendGroupMessageRequest {
+            content: Some(content.to_string()),
+            msg_type: 0, // 0 = text message
+            msg_id,
+            event_id,
+            msg_seq,
+            media: None,
+        };
+
+        tracing::debug!("Sending message to group {}: {:#?}", group_openid, payload);
+
+        let resp = self.client
+            .post(&url)
+            .header("Authorization", format!("QQBot {}", self.access_token))
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let response: SendMessageResponse = match resp.json().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to parse send message response: {}", e);
+                return Err(anyhow::anyhow!("Failed to parse send message response: {}", e));
+            }
+        };
+        tracing::info!(
+            "Message sent successfully - ID: {}, Timestamp: {}",
+            response.id,
+            response.timestamp
+        );
+
+        Ok(response)
+    }
+
+    pub async fn test_send_message(&self) -> anyhow::Result<()> {
+        let group_openid = "850923669"; // Replace with actual group_openid
+        
+        match self.send_group_message(
+            group_openid,
+            "Shirokane Rinko desu >_",
+            None,
+            None,
+            None,
+        ).await {
             Ok(response) => {
-                let status = response.status();
-                let resp_text = response.text().await.unwrap_or_default();
-                tracing::info!("Test message sent. Status: {}, Response: {}", status, resp_text);
+                tracing::info!(
+                    "Test message sent successfully - ID: {}, Timestamp: {}",
+                    response.id,
+                    response.timestamp
+                );
                 Ok(())
             }
             Err(e) => {
                 tracing::error!("Failed to send test message: {}", e);
-                Err(anyhow::anyhow!("Failed to send test message: {}", e))
+                Err(e)
             }
         }
     }

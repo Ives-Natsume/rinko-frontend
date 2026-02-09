@@ -1,4 +1,3 @@
-use rinko_frontend::frontend::qq;
 use rinko_frontend::logging;
 use rinko_frontend::config;
 use rinko_frontend::config::QQConfig;
@@ -24,14 +23,14 @@ async fn main() -> anyhow::Result<()> {
             QQConfig::start_token_renewal_task(qq_cfg_shared.clone());
             tracing::info!("QQ token auto-renewal task started.");
 
-            let qq_cfg_for_test = qq_cfg_shared.clone();
-            // Test sending a message after initialization
+            // Start webhook server
+            let qq_cfg_for_webhook = qq_cfg_shared.clone();
             tokio::spawn(async move {
-                let cfg = qq_cfg_for_test.read().await;
-                if let Err(e) = cfg.test_send_message().await {
-                    tracing::error!("Failed to send test message: {}", e);
+                if let Err(e) = QQConfig::start_webhook_server(qq_cfg_for_webhook, 3110).await {
+                    tracing::error!("Webhook server error: {}", e);
                 }
             });
+            tracing::info!("QQ webhook server starting on port 3110...");
             
             // Keep the program running to allow the background task to work
             // In a real application, you'd have your main bot logic here
